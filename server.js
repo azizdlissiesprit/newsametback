@@ -32,6 +32,46 @@ mongoose.connect(mongoURI, {
 });
 
 // Define a schema for products
+const optionSchema = new mongoose.Schema({
+  typeOption: String,
+  nomOption: String,
+  sizesOptions: [String],
+  customOptions:[{
+    name: String,
+    prix: String,
+  }],
+  singleOptionPrice : String // Correct way to define an array of strings
+});
+const Option = mongoose.model('options', optionSchema);
+
+const validationSchema = new mongoose.Schema({
+  productID: String,
+  productName: String,
+  options:[{
+    name: String,
+    prix: String,
+  }],
+  quantity: String,
+  dateOfOrder: String,
+  clientName: String,
+  totalPrice: String
+});
+const Validation = mongoose.model('validations', validationSchema);
+
+const userSchema = new mongoose.Schema({
+  username: { type: String, required: true },
+  password: { type: String, required: true },
+  addProduct: { type: Boolean, default: false },
+  modifyProduct: { type: Boolean, default: false },
+  accessProductList: { type: Boolean, default: false },
+  accessAnalytics: { type: Boolean, default: false },
+  manageCategories: { type: Boolean, default: false },
+  validateOrders: { type: Boolean, default: false },
+  addHyperPoints: { type: Boolean, default: false },
+});
+const User = mongoose.model('users', userSchema);
+
+
 const productSchema = new mongoose.Schema({
   idProd: String,
   typeProd: String,
@@ -81,7 +121,11 @@ const productSchema = new mongoose.Schema({
 const Product = mongoose.model('produits', productSchema);
 const categorieSchema = new mongoose.Schema({
   maincat: String,
-  subcats: [String] // Array of strings
+  hiddenCat :String,
+  subcats: [{
+    subcat: String,
+    hiddenSubCat: String
+  }] // Array of strings
 });
 // Create a model from the schema
 const Categorie = mongoose.model('categories', categorieSchema);
@@ -103,7 +147,57 @@ const storage = multer.diskStorage({
 });
 // Initialize multer with the defined storage configuration
 const upload = multer({ storage: storage });
+app.post('/api/users/add-user', async (req, res) => {
+  const { username, password, rights } = req.body;
 
+  try {
+    // Create a new user instance
+    const newUser = new User({
+      username,
+      password,  // You should hash the password before saving it in a real application
+      ...rights, // Add the rights (checkbox values)
+    });
+
+    // Save the new user to the database
+    await newUser.save();
+
+    // Send success response
+    res.status(201).json({ message: 'User created successfully!', user: newUser });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to create user.' });
+  }
+});
+
+app.put("/api/categories/rename-subcategory/:id", async (req, res) => {
+  const { id } = req.params;
+  const { oldName, newName } = req.body;
+
+  if (!oldName || !newName || newName.trim() === "") {
+    return res.status(400).json({ error: "Old and new subcategory names are required." });
+  }
+
+  try {
+    const category = await Categorie.findById(id);
+    if (!category) {
+      return res.status(404).json({ error: "Category not found." });
+    }
+
+    const subcatIndex = category.subcats.indexOf(oldName);
+    if (subcatIndex === -1) {
+      return res.status(404).json({ error: "Subcategory not found." });
+    }
+
+    // Rename the subcategory
+    category.subcats[subcatIndex] = newName.trim();
+    await category.save();
+
+    res.status(200).json({ success: true, message: "Subcategory renamed successfully." });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to rename subcategory." });
+  }
+});
 app.post('/api/upload-images', upload.array('images'), (req, res) => {
   try {
     console.log("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
@@ -117,8 +211,135 @@ app.post('/api/upload-images', upload.array('images'), (req, res) => {
     res.status(500).json({ error: 'Image upload failed' });
   }
 });
+app.put('/api/categories/hide-category/:categoryId', async (req, res) => {
+  const { categoryId } = req.params;
+  const { hiddenCat } = req.body; // Expect the new "hiddenCat" value ("yes" or "no")
 
+  if (!hiddenCat) {
+    return res.status(400).json({ error: 'Hidden category value is required' });
+  }
 
+  try {
+    const updatedCategory = await Categorie.findByIdAndUpdate(
+      categoryId,
+      { hiddenCat }, // Update the hiddenCat field
+      { new: true } // Return the updated category
+    );
+
+    if (!updatedCategory) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+
+    res.status(200).json(updatedCategory);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to update category visibility' });
+  }
+});
+app.put('/api/categories/hide-subcategory/:categoryId/:subcatName', async (req, res) => {
+  const { categoryId, subcatName } = req.params;
+  const { hiddenSubCat } = req.body; // Expect the new "hiddenSubCat" value ("yes" or "no")
+
+  if (!hiddenSubCat) {
+    return res.status(400).json({ error: 'Hidden subcategory value is required' });
+  }
+
+  try {
+    // Find the category and update the specific subcategory's hiddenSubCat value
+    const updatedCategory = await Categorie.findOneAndUpdate(
+      { _id: categoryId, "subcats.subcat": subcatName },
+      { $set: { "subcats.$.hiddenSubCat": hiddenSubCat } }, // Update the hiddenSubCat value of the specific subcategory
+      { new: true } // Return the updated category
+    );
+
+    if (!updatedCategory) {
+      return res.status(404).json({ error: 'Category or subcategory not found' });
+    }
+
+    res.status(200).json(updatedCategory);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to update subcategory visibility' });
+  }
+});
+
+app.post('/api/addcategories', async (req, res) => {
+  const maincat  = req.body.name;
+  console.log(maincat);
+  // Validate the input
+  if (!maincat || typeof maincat !== 'string' || maincat.trim() === '') {
+    return res.status(400).json({ error: 'Main category name is required and must be a valid string.' });
+  }
+
+  try {
+    // Check if the category already exists
+    const existingCategory = await Categorie.findOne({ maincat: maincat.trim() });
+    if (existingCategory) {
+      return res.status(409).json({ error: 'Category already exists.' });
+    }
+
+    // Create a new category document
+    const newCategory = new Categorie({
+      maincat: maincat.trim(),
+      hiddenCat :"no",
+      subcats: [] // Initialize with an empty array of subcategories
+    });
+
+    // Save the document to the database
+    await newCategory.save();
+
+    return res.status(201).json({
+      message: 'Category added successfully!',
+      category: newCategory
+    });
+  } catch (error) {
+    console.error('Error adding category:', error);
+    return res.status(500).json({ error: 'Internal server error.' });
+  }
+});
+app.delete('/api/categories/:categoryId/subcategories/:subcategory', async (req, res) => {
+  const { categoryId, subcategory } = req.params;
+
+  try {
+    const category = await Categorie.findById(categoryId);
+    if (!category) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+
+    // Remove the subcategory from the subcats array
+    const updatedSubcats = category.subcats.filter(sub => sub !== subcategory);
+    category.subcats = updatedSubcats;
+
+    await category.save(); // Save the updated category
+    res.status(200).json({ message: 'Subcategory deleted successfully', category });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to delete subcategory' });
+  }
+});
+app.put("/api/categories/rename/:id", async (req, res) => {
+  const { id } = req.params;
+  const { newName } = req.body;
+
+  if (!newName || newName.trim() === "") {
+    return res.status(400).json({ error: "New category name is required." });
+  }
+
+  try {
+    const category = await Categorie.findById(id);
+    if (!category) {
+      return res.status(404).json({ error: "Category not found." });
+    }
+
+    category.maincat = newName.trim();
+    await category.save();
+
+    res.status(200).json({ success: true, message: "Category renamed successfully." });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to rename category." });
+  }
+});
 app.post('/api/products/update-hyperpoints', async (req, res) => {
   const { idProd, clickpos } = req.body;
 
@@ -150,6 +371,60 @@ app.post('/api/products/update-hyperpoints', async (req, res) => {
   } catch (error) {
     console.error('Error updating product hyperpoints:', error);
     return res.status(500).json({ message: 'Server error', error });
+  }
+});
+app.get('/api/getoptions', async (req, res) => {
+  try {
+    const options = await Option.find();
+    console.log(options); // Fetch all options from the database
+    res.status(200).json(options);
+  } catch (error) {
+    console.error('Error fetching options:', error);
+    res.status(500).json({ message: 'Failed to fetch options.' });
+  }
+});
+app.post('/api/options', async (req, res) => {
+  try {
+    
+    // Destructure the required fields from the request body
+    const { nomOption, typeOption, customOptions, singleOptionPrice,sizesOptions } = req.body;
+    // Validate input
+    if (!nomOption || !typeOption) {
+      return res.status(400).json({ message: 'Invalid input data. "nomOption" and "typeOption" are required.' });
+    }
+
+    // Create the base option data
+    const newOption = new Option({
+      nomOption,
+      typeOption,
+    });
+
+    // Add `customOptions` if provided and valid
+    if (Array.isArray(customOptions)) {
+      newOption.customOptions = customOptions.map((option) => ({
+        name: option.name,
+        prix: option.prix,
+      }));
+    }
+    if (Array.isArray(sizesOptions)) {
+      sizesOptions.forEach((size) => {
+        newOption.sizesOptions.push(size.price);  // Just pushing the price values, as per your schema
+      });
+    }
+
+    // Add `singleOptionPrice` if provided
+    if (singleOptionPrice) {
+      newOption.singleOptionPrice = singleOptionPrice;
+    }
+
+    // Save the option to MongoDB
+    const savedOption = await newOption.save();
+
+    // Respond with the saved option
+    res.status(201).json(savedOption);
+  } catch (error) {
+    console.error('Error saving option:', error);
+    res.status(500).json({ message: 'Server Error' });
   }
 });
 app.post('/api/products', async (req, res) => {
@@ -197,15 +472,107 @@ app.post('/api/products', async (req, res) => {
   
 
 });
+app.delete('/api/delcategories/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Find and delete the category by ID
+    const deletedCategory = await Categorie.findByIdAndDelete(id);
+
+    if (!deletedCategory) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+
+    res.status(200).json({ message: 'Category deleted successfully', deletedCategory });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to delete category' });
+  }
+});
+app.patch('/api/categories/:id/subcategories', async (req, res) => {
+  const { id } = req.params; // Category ID
+  const { subcat } = req.body; // New subcategory name
+
+  if (!subcat) {
+    return res.status(400).json({ error: 'Subcategory name is required' });
+  }
+
+  try {
+    const newSubcategory = { subcat, hiddenSubCat: "no" };
+    // Find the category by ID and update its subcats array
+    const updatedCategory = await Categorie.findByIdAndUpdate(
+      id,
+      { $push: { subcats: newSubcategory } }, // Add subcategory to the array
+      { new: true } // Return the updated document
+    );
+
+    if (!updatedCategory) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+
+    res.status(200).json(updatedCategory);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to add subcategory' });
+  }
+});
+app.put('/api/categories/remove-subcategory/:categoryId', async (req, res) => {
+  const { categoryId } = req.params;
+  const { subcatName } = req.body;
+
+  if (!subcatName) {
+    return res.status(400).json({ error: 'Subcategory name is required.' });
+  }
+
+  try {
+    const updatedCategory = await Categorie.findByIdAndUpdate(
+      categoryId,
+      { $pull: { subcats: { subcat: subcatName } } }, // Remove subcategory by name
+      { new: true } // Return the updated document
+    );
+
+    if (!updatedCategory) {
+      return res.status(404).json({ error: 'Category not found.' });
+    }
+
+    res.status(200).json({ success: 'Subcategory removed successfully.', updatedCategory });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to remove subcategory.' });
+  }
+});
+
+
+app.patch('/api/categories/:categoryId/subcategories/:subcategoryId', async (req, res) => {
+  const { categoryId, subcategoryId } = req.params;
+  const { newSubcatName } = req.body;
+
+  if (!newSubcatName) {
+    return res.status(400).json({ error: 'New subcategory name is required' });
+  }
+
+  try {
+    const updatedCategory = await Categorie.findOneAndUpdate(
+      { _id: categoryId, "subcats._id": subcategoryId },
+      { $set: { "subcats.$.subcat": newSubcatName } },
+      { new: true }
+    );
+
+    if (!updatedCategory) {
+      return res.status(404).json({ error: 'Category or subcategory not found' });
+    }
+
+    res.status(200).json(updatedCategory);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to rename subcategory' });
+  }
+});
 
 
 
 
-
-
-
-
-app.get('/get-categories', async (req, res) => {
+app.get('/api/categories', async (req, res) => {
   try {
     const categories = await Categorie.find({});
     res.json(categories);
